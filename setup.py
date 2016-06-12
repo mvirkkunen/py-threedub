@@ -9,6 +9,8 @@ setup(
         "Crypto",
         "Padding",
     ],
+    tests_require=["nose"],
+    test_suite="nose.collector",
     entry_points={
         "console_scripts": [
             "threedub = threedub.main:threedub",

@@ -27,18 +27,59 @@ class GCodeTranslationHeaders(object):
 ; brim_width = 0
 ; total_layers = 1
 ; version = 15062609
-; total_filament = 1.00
+; total_filament = {total_filament}
 ; nozzle_diameter = 0.40
 ; extruder_filament = 1.00:0.00
 ; dimension = 1.00:1.00:1.00
 ; extruder = 1
 """
 
+    @classmethod
+    def translate_davincijr10(cls, info):
+        if 'filament used' in info:
+            log.debug("Found slic3r-style filament statement")
+            # Slic3r
+            filament = info['filament used']
+        elif 'Filament used' in info:
+            # Cura (in meters)
+            log.debug("Found cura-style filament statement")
+            filament = info['Filament used']
+        filament = filament.split()[0]
+        if filament.endswith("mm"):
+            filament = filament.replace("mm", "")
+        elif filament.endswith("m"):
+            filament = filament.replace("m", "")
+            filament = "{:.1f}".format(float(filament) * 1000.0)
+        info['total_filament'] = filament
+        return info
+
+
+class GCodeTranslations(object):
+    @classmethod
+    def translate_davincijr10(cls, gcode, keywords):
+        newcode = []
+        for code in gcode:
+            if not hasattr(code, "statement"):
+                newcode.append(code)
+                continue
+            if code.statement.startswith("G0 "):
+                # DaVinci doesn't use G0 so we make them G1
+                statement = code.statement.replace("G0 ", "G1 ")
+            else:
+                statement = code.statement
+            newcode.append(GCodeStatement(statement))
+        return newcode
+
+
 class GCodeHeaderLine(object):
     @classmethod
     def from_string(cls, string):
         string = string.strip("; ")
-        parts = map(str.strip, string.split("=", 1))
+        # Split on = first
+        parts = [str.strip(s) for s in string.split("=", 1)]
+        if len(parts) == 1:
+            # Try splitting on colon
+            parts = [str.strip(s) for s in string.split(":", 1)]
         if len(parts) > 1:
             return cls(parts[0], parts[1])
         else:
@@ -74,6 +115,12 @@ class GCodeFile(object):
     Headers = {
         DaVinciJr10: GCodeTranslationHeaders.DaVinciJr10,
     }
+    HeaderHandlers = {
+        DaVinciJr10: GCodeTranslationHeaders.translate_davincijr10,
+    }
+    GCodes = {
+        DaVinciJr10: GCodeTranslations.translate_davincijr10,
+    }
 
     @classmethod
     def from_file(cls, path):
@@ -82,36 +129,46 @@ class GCodeFile(object):
 
     @classmethod
     def from_string(cls, string):
-        items = []
+        header = []
+        gcode = [] 
+        in_gcode = False
         for line in BytesIO(string):
             line = line.strip()
+            if in_gcode:
+                target = gcode
+            else:
+                target = header
             if not line:
-                items.append(GCodeBlankLine())
+                target.append(GCodeBlankLine())
                 continue
             if line.startswith(";"):
-                log.debug("Read header: {}".format(line))
-                items.append(GCodeHeaderLine.from_string(line))
+                target.append(GCodeHeaderLine.from_string(line))
             else:
                 if line:
-                    log.debug("Read gcode: {}".format(line))
-                    items.append(GCodeStatement.from_string(line))
-        return cls(items)
+                    in_gcode = True
+                    target.append(GCodeStatement.from_string(line))
+        return cls(header, gcode)
 
 
-    def __init__(self, items):
-        self._items = items
+    def __init__(self, header, gcode):
+        self._header = header
+        self._gcode = gcode
 
     @property
     def items(self):
-        return self._items
+        return self._header + self._gcode
 
     @property
     def header(self):
-        return filter(lambda x: isinstance(x, GCodeHeaderLine), self._items)
+        return self._header
 
     @property
     def gcode(self):
-        return filter(lambda x: isinstance(x, GCodeStatement), self._items)
+        return self._gcode
+
+    @property
+    def text(self):
+        return os.linesep.join(map(str, self.items))
 
     @property
     def header_text(self):
@@ -124,27 +181,47 @@ class GCodeFile(object):
     def write(self, path):
         log.debug("Writing output file: {}".format(path))
         with open(path, "w") as f:
-            for item in self._items:
+            for item in self.items:
                 f.write(str(item))
                 f.write(os.linesep)
 
-    def format_header(self, header, info):
-        return header.format(**info)
+    def format_header(self, model, info):
+        header = self.Headers.get(model)
+        if header:
+            if model in self.HeaderHandlers:
+                info = self.HeaderHandlers[model](info)
+            return header.format(**info)
+        else:
+            return ""
+
+    def translate_gcode(self, model, keywords):
+        gcode = self.GCodes.get(model)
+        if gcode:
+            return gcode(self._gcode, keywords)
+        else:
+            return self._gcode
 
     def header_values(self):
+        """
+        Reads header values from entire file, even if it doesn't appear
+        specifically before the first gcode.
+        """
         data = {}
-        for item in self.header:
-            data[item.key] = item.value
+        for item in self.items:
+            if isinstance(item, GCodeHeaderLine):
+                data[item.key] = item.value
         return data
 
     def translate(self, model, **kwargs):
+        # Update header
         info = self.header_values()
         info.update(kwargs)
-        header = self.format_header(self.Headers[model], info)
-        newitems = filter(lambda i: not isinstance(i, GCodeHeaderLine), self._items)
+        header = self.format_header(model, info)
         newheader = []
         for line in BytesIO(header):
             newheader.append(GCodeHeaderLine.from_string(line))
-        self._items = newheader + newitems
+        self._header = newheader
+        # Update body
+        self._gcode = self.translate_gcode(model, kwargs)
 
 
