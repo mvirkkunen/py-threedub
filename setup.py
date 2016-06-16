@@ -6,7 +6,7 @@ setup(
     description="Python port of ThreeDubber",
     packages=find_packages(),
     install_requires=[
-        "Crypto",
+        "pycrypto",
         "Padding",
     ],
     tests_require=["nose"],

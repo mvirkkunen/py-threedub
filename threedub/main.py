@@ -1,22 +1,150 @@
 import logging
 import os
+import sys
+from . import slicers
+from . import models
+from . import printers
 from .gcode import GCodeFile
 from .davinci import ThreeWFile
+from .bases import Slicer, ModelTranslator, PrinterInterface
+from .translator import GCodeTranslator
 from argparse import ArgumentParser
 
 log = logging.getLogger(__name__)
 
+class FilePath(object):
+    XYZ3wFile = ".3w"
+    GCodeFile = ".gcode"
+    Types = set([XYZ3wFile, GCodeFile])
+
+    def __init__(self, path):
+        self.path = path
+
+    @property
+    def file_type(self):
+        ext = os.path.splitext(self.path)[1]
+        if ext:
+            return ext
+        return ""
+
+    @file_type.setter
+    def file_type(self, totype):
+        if totype and not totype.startswith("."):
+            totype = "." + totype
+        self.path = os.path.splitext(self.path)[0] + totype
+        
+
 def build_argparse():
-    ap = ArgumentParser()
-    ap.add_argument("infile", nargs="?", default="", help="Input gcode file")
+    ap = ArgumentParser(description="""\
+Convert and/or translate a gcode file for use with XYZPrinting 3D printers.
+
+The default behavior translates gcode headers, then encodes to .3w if the
+output filename ends with .3w, or conversion is specifically requested.
+""")
+    ap.add_argument("infile", nargs="?", default="", help="Input file")
     ap.add_argument("outfile", nargs="?", default="", help="Output file")
     ap.add_argument("-d", "--debug", action="store_true", help="Debug logging")
-    ap.add_argument("-T", "--no-translate", action="store_false", default=True, dest="translate", help="Don't translate output (keep input headers)")
-    ap.add_argument("-D", "--decrypt", action="store_true", default=False, dest="decrypt", help="Decrypt 3w to gcode")
-    ap.add_argument("-E", "--no-encrypt", action="store_false", default=True, dest="encrypt", help="Don't encrypt output (produce gcode)")
-    ap.add_argument("-m", "--model", default=GCodeFile.DaVinciJr10, help="Model to translate for")
-    ap.add_argument("-l", "--list", default=False, action="store_true", help="List known models")
+    ap.add_argument("-f", "--output-format", default=None, help="Output file type ({})".format(", ".join(sorted(FilePath.Types))))
+    ap.add_argument("-m", "--model", default="davincijr", help="Machine to translate headers for. Set to 'none' for no translation.")
+    ap.add_argument("-s", "--slicer", default="auto", help="Flavor of Slicer gcode being read. Tries to autodetect if not given.")
+    ap.add_argument("-l", "--list", default=False, action="store_true", help="List known models (for -m) and slicers (for -s)")
+    ap.add_argument("-e", "--device", default="/dev/ttyACM0", help="Printer device name or address")
+    ap.add_argument("-q", "--status", dest="status", default=False, action="store_true", help="Show printer status")
+    ap.add_argument("-p", "--print", dest="start_print", default=False, action="store_true", help="Print the file to the named device (in addition to encoding and translating) (default: /dev/ttyACM0)")
     return ap
+
+
+# convert - change from one format to another
+#  gcode -> 3w
+#  3w -> gcode
+# translate - change content keeping file type #  - postprocess gcode (G0->G1)
+#  - change gcode headers (to 3w format)
+#  - change start gcode
+#  - change end gcode
+#
+# PRINTER commands
+# - query
+# - print
+#
+# Can combine:
+#  threedub --convert infile.gcode -o outfile.3w --translate xyz --gcode-start
+
+def list_support():
+    # List model translators
+    print "Models:"
+    print "  {:12s}: {}".format("none", "Disable header translation")
+    for trans in ModelTranslator.implementations():
+        print "  {:12s}: {}".format(trans.model, trans.description)
+    print
+    # List slicers
+    print "Slicers:"
+    print "  {:12s}: {}".format("auto", "Auto-detect")
+    for slicer in Slicer.implementations():
+        print "  {:12s}: {}".format(slicer.name, slicer.description)
+    print
+    print "Output formats:"
+    for t in sorted(FilePath.Types):
+        print "  {}".format(t.replace(".", ""))
+    print
+
+def process_file(args):
+    """
+    Take requested actions on the input file.
+    Returns a 3-tuple of (3w file, intermediate file, outfile).
+    Input file may be none if input was gcode.
+    """
+    # Figure out output path and/or format.
+    inpath = FilePath(args.infile)
+    if args.outfile:
+        # Infer output_format if not set from file path
+        outpath = FilePath(args.outfile)
+        if not args.output_format:
+            args.output_format = outpath.file_type
+    else:
+        # Infer output path from infile and output_format
+        # If output_format is unset, assume .3w
+        outpath = FilePath(args.infile)
+        if not args.output_format:
+            args.output_format = FilePath.XYZ3wFile
+        outpath.file_type = args.output_format
+        args.outfile = outpath.path
+
+    if args.output_format.replace(".", "") not in [t.replace(".", "") for t in FilePath.Types]:
+        print >> sys.stderr, "Unknown output format: {}".format(args.output_format)
+        return 1
+
+    # Figure out what steps to take to get to output format
+    decode = (inpath.file_type == FilePath.XYZ3wFile)
+    gcodeformat = args.slicer
+    model = args.model
+    encode = (args.output_format == FilePath.XYZ3wFile)
+
+    # Decode/open
+    twfile = None
+    intermediate = None
+    outfile = None
+    if decode:
+        log.debug("Decoding '{}' as 3w".format(args.infile))
+        twfile = ThreeWFile.from_file(args.infile)
+        intermediate = twfile.gcode
+    else:
+        log.debug("Reading '{}' as gcode".format(args.infile))
+        intermediate = GCodeFile.from_file(args.infile)
+
+    # Translate
+    if args.model != "none":
+        log.debug("Translating to model '{}' with slicer setting '{}'".format(args.model, args.slicer))
+        GCodeTranslator(args.model, args.slicer).translate(intermediate, filename=args.outfile)
+
+    # Encode/write
+    if encode:
+        log.debug("Encoding to 3w: '{}'".format(args.outfile))
+        outfile = ThreeWFile(intermediate)
+    else:
+        log.debug("Encoding to gcode: '{}'".format(args.outfile))
+        outfile = intermediate
+    return twfile, intermediate, outfile
+
 
 def threedub(argv=None):
     ap = build_argparse()
@@ -28,38 +156,53 @@ def threedub(argv=None):
         logging.basicConfig(level=logging.INFO)
 
     if args.list:
-        for model in GCodeFile.Models.keys():
-            print model
+        list_support()
         return 0
 
-    if not args.infile:
+    # Validate args
+    printhandler = None
+    if args.start_print and args.model == "none":
+        log.error("Can't print with model set to 'none'")
+        return 1
+
+    # Check for print handler
+    if args.start_print or args.status:
+        log.debug("Using '{}' as print device".format(args.device))
+        printcls = PrinterInterface.model_handler(args.model)
+        log.debug("Found print handler for model '{}'".format(args.model))
+        if not printcls:
+            log.error("Printing for model '{}' not supported".format(args.model))
+            return 1
+        printhandler = printcls(args.device)
+
+    # No input file or status query; show help
+    if not args.infile and not args.status:
         ap.print_help()
         return 0
 
-    if args.encrypt:
-        outputext = "3w"
-    elif args.decrypt or not args.encrypt:
-        outputext = "gcode"
+    # Status?
+    if args.status:
+        with printhandler as h:
+            print h.status()
 
-    if not args.outfile:
-        args.outfile = os.path.splitext(os.path.basename(args.infile))[0] + "." + outputext
-
-    if args.decrypt:
-        log.debug("Decrypting...")
-        infile = ThreeWFile.from_file(args.infile)
-        infile.gcode.write(args.outfile)
+    # Process file and write it if we're not just printing
+    # If output file is same as input, don't update it unless user specified the name
+    pathgiven = args.outfile
+    twfile, intermediate, outfile = process_file(args)
+    if args.infile != args.outfile or pathgiven:
+        outfile.write(args.outfile)
     else:
-        infile = GCodeFile.from_file(args.infile)
-        if args.translate:
-            log.debug("Translating...")
-            infile.translate(args.model, filename=os.path.basename(args.outfile))
+        log.debug("Not overwriting input file: {}. If this is really what you want, specify the output file path".format(args.infile))
 
-        if args.encrypt:
-            log.debug("Encrypting...")
-            outfile = ThreeWFile(infile)
-            outfile.write(args.outfile)
+    # Print?
+    if args.start_print:
+        log.debug("Printing file to device '{}'".format(args.device))
+        # If we didn't convert before, we need to now
+        print_data = None
+        if args.output_format == FilePath.XYZ3wFile:
+            print_file = outfile
         else:
-            log.debug("Not encrypting...")
-            outfile = GCodeFile(infile.header, infile.gcode)
-            outfile.write(args.outfile)
-
+            print_file = ThreeWFile(intermediate)
+            print_data = print_file.encrypt()
+        with printhandler as h:
+            h.print_data(args.outfile, print_data)

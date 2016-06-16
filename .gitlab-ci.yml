@@ -1,0 +1,10 @@
+build_packages:
+    script:
+        - python setup.py sdist
+    artifacts:
+        paths:
+            - dist
+
+test_code:
+    script:
+        - python setup.py nosetests
