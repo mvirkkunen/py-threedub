@@ -36,6 +36,7 @@ class GCodeTranslationHeaders(object):
 
     @classmethod
     def translate_davincijr10(cls, info):
+        filament = "1"
         if 'filament used' in info:
             log.debug("Found slic3r-style filament statement")
             # Slic3r
