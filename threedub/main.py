@@ -7,32 +7,12 @@ from . import printers
 from .gcode import GCodeFile
 from .davinci import ThreeWFile
 from .bases import Slicer, ModelTranslator, PrinterInterface
+from .filepath import FilePath
 from .translator import GCodeTranslator
 from argparse import ArgumentParser
 
 log = logging.getLogger(__name__)
 
-class FilePath(object):
-    XYZ3wFile = ".3w"
-    GCodeFile = ".gcode"
-    Types = set([XYZ3wFile, GCodeFile])
-
-    def __init__(self, path):
-        self.path = path
-
-    @property
-    def file_type(self):
-        ext = os.path.splitext(self.path)[1]
-        if ext:
-            return ext
-        return ""
-
-    @file_type.setter
-    def file_type(self, totype):
-        if totype and not totype.startswith("."):
-            totype = "." + totype
-        self.path = os.path.splitext(self.path)[0] + totype
-        
 
 def build_argparse():
     ap = ArgumentParser(description="""\
@@ -51,6 +31,7 @@ output filename ends with .3w, or conversion is specifically requested.
     ap.add_argument("-e", "--device", default="/dev/ttyACM0", help="Printer device name or address")
     ap.add_argument("-q", "--status", dest="status", default=False, action="store_true", help="Show printer status")
     ap.add_argument("-p", "--print", dest="start_print", default=False, action="store_true", help="Print the file to the named device (in addition to encoding and translating) (default: /dev/ttyACM0)")
+    ap.add_argument("-c", "--console", dest="console", default=False, action="store_true", help="Open a console for direct communication.")
     return ap
 
 
@@ -166,17 +147,22 @@ def threedub(argv=None):
         return 1
 
     # Check for print handler
-    if args.start_print or args.status:
+    if args.start_print or args.status or args.console:
         log.debug("Using '{}' as print device".format(args.device))
         printcls = PrinterInterface.model_handler(args.model)
-        log.debug("Found print handler for model '{}'".format(args.model))
+        log.debug("Found handler for model '{}'".format(args.model))
         if not printcls:
-            log.error("Printing for model '{}' not supported".format(args.model))
+            log.error("Communication with model '{}' not supported".format(args.model))
             return 1
         printhandler = printcls(args.device)
 
+    if printhandler and args.console:
+        printhandler.console()
+        return 0
+
+
     # No input file or status query; show help
-    if not args.infile and not args.status:
+    if not args.infile and not args.status and not args.console:
         ap.print_help()
         return 0
 
@@ -187,12 +173,13 @@ def threedub(argv=None):
 
     # Process file and write it if we're not just printing
     # If output file is same as input, don't update it unless user specified the name
-    pathgiven = args.outfile
-    twfile, intermediate, outfile = process_file(args)
-    if args.infile != args.outfile or pathgiven:
-        outfile.write(args.outfile)
-    else:
-        log.debug("Not overwriting input file: {}. If this is really what you want, specify the output file path".format(args.infile))
+    if args.infile:
+        pathgiven = args.outfile
+        twfile, intermediate, outfile = process_file(args)
+        if args.infile != args.outfile or pathgiven:
+            outfile.write(args.outfile)
+        else:
+            log.info("Not overwriting input file: {}. If this is really what you want, specify the output file path".format(args.infile))
 
     # Print?
     if args.start_print:
