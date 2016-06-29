@@ -84,7 +84,7 @@ def process_file(args):
     else:
         # Infer output path from infile and output_format
         # If output_format is unset, assume .3w
-        outpath = FilePath(args.infile)
+        outpath = FilePath(os.path.basename(args.infile))
         if not args.output_format:
             args.output_format = FilePath.XYZ3wFile
         outpath.file_type = args.output_format

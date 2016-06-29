@@ -21,6 +21,6 @@ class TestMain(TestCase):
             basename = "tube_" + name
             threedub([os.path.join(self.root, basename + ".gcode")])
             self.assertTrue(os.path.exists(basename + ".3w"))
-            threedub(["-D", basename + ".3w"])
+            threedub(["-f", "gcode", basename + ".3w"])
             print os.listdir(".")
             self.assertTrue(os.path.exists(basename + ".gcode"))
