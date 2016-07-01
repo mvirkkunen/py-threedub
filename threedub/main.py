@@ -168,8 +168,7 @@ def threedub(argv=None):
 
     # Status?
     if args.status:
-        with printhandler as h:
-            print h.status()
+        print printhandler.status()
 
     # Process file and write it if we're not just printing
     # If output file is same as input, don't update it unless user specified the name
@@ -191,5 +190,4 @@ def threedub(argv=None):
         else:
             print_file = ThreeWFile(intermediate)
             print_data = print_file.encrypt()
-        with printhandler as h:
-            h.print_data(args.outfile, print_data)
+        printhandler.print_data(args.outfile, print_data)
