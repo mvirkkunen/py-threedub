@@ -30,6 +30,7 @@ output filename ends with .3w, or conversion is specifically requested.
     ap.add_argument("-l", "--list", default=False, action="store_true", help="List known models (for -m) and slicers (for -s)")
     ap.add_argument("-e", "--device", default="/dev/ttyACM0", help="Printer device name or address")
     ap.add_argument("-q", "--status", dest="status", default=False, action="store_true", help="Show printer status")
+    ap.add_argument("-r", "--raw", dest="raw", default=False, action="store_true", help="Show raw status values")
     ap.add_argument("-p", "--print", dest="start_print", default=False, action="store_true", help="Print the file to the named device (in addition to encoding and translating) (default: /dev/ttyACM0)")
     ap.add_argument("-c", "--console", dest="console", default=False, action="store_true", help="Open a console for direct communication.")
     return ap
@@ -168,7 +169,7 @@ def threedub(argv=None):
 
     # Status?
     if args.status:
-        print printhandler.status()
+        print printhandler.status(args.raw)
 
     # Process file and write it if we're not just printing
     # If output file is same as input, don't update it unless user specified the name

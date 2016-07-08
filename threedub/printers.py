@@ -5,6 +5,8 @@ import os
 import logging
 import time
 import sys
+import json
+from io import BytesIO
 from threading import Thread, Event
 from Queue import Queue, Empty
 from datetime import datetime, timedelta
@@ -12,6 +14,205 @@ from .filepath import FilePath
 from .bases import PrinterInterface
 
 log = logging.getLogger(__name__)
+
+class XYZStatusLine(object):
+    key = None
+
+    def __init__(self, key, name, description, default=None, subvals=None):
+        self.key = key
+        self.name = name
+        self.description = description
+        self.value = default
+        self.subvals = subvals
+        self.subval_names = []
+
+    @classmethod
+    def parse_line(cls, line):
+        parts = [s.strip() for s in line.split(":", 1)]
+        if len(parts) != 2:
+            raise Exception("Bad status line: {}".format(line))
+        key, value = parts
+        return key, value
+
+    def parse(self, line):
+        if not self.subvals:
+            self.subval_names = []
+            self.value = line
+        else:
+            nfields = line.count(',')+1
+            if isinstance(self.subvals, dict) and nfields in self.subvals:
+                self.subval_names = self.subvals[nfields]
+            else:
+                self.subval_names = self.subvals
+            self.value = line.split(",", len(self.subval_names) or None)
+
+    def __str__(self):
+        if not self.subval_names:
+            return "{description}: {value}".format(**vars(self))
+        else:
+            s = []
+            for n, obj in enumerate(self.value):
+                vals = vars(self).copy()
+                if n < len(self.subval_names):
+                    vals['index'] = self.subval_names[n]
+                else:
+                    vals['index'] = n
+                if vals['index'] is None:
+                    continue
+                vals['value'] = obj
+                s.append("{description} {index}: {value}".format(**vals))
+            return "\n".join(s)
+        
+
+class XYZStatusLine_s(XYZStatusLine):
+    key = "s"
+
+    def parse(self, value):
+        data = json.loads(value)
+        self.value = data
+
+    def __str__(self):
+        lines = []
+        for key, value in sorted(self.value.items(), key=lambda p: p[0]):
+            flag = bool(value)
+            if key == "sd":
+                lines.append("SD Card present: {}".format(flag))
+            elif key == "eh":
+                lines.append("Supports Engraving: {}".format(flag))
+            elif key == "dr":
+                for drname, dropen in value.items():
+                    lines.append("Door open ({}): {}".format(drname, bool(dropen)))
+            elif key == "of":
+                lines.append("Allows open filament: {}".format(flag))
+            elif key == "buzzer":
+                lines.append("Buzzer available: {}".format(flag))
+            elif key == "fm":
+                lines.append("fm value (unknown): {}".format(flag))
+            elif key == "fd":
+                lines.append("fd value (unknown): {}".format(flag))
+        return "\n".join(lines)
+
+
+class XYZStatusLine_list(XYZStatusLine):
+    def parse(self, value):
+        parts = value.split(",")
+        if parts[0] == "1":
+            self.value = parts[1]
+            self.subval_names = []
+        else:
+            self.value = parts
+            self.subval_names = range(1, len(parts)+1)
+
+class XYZStatusLine_t(XYZStatusLine_list):
+    key = "t"
+
+class XYZStatusLine_w(XYZStatusLine_list):
+    key = "w"
+
+class XYZStatusLine_X(XYZStatusLine_list):
+    key = "X"
+
+class XYZStatusLine_f(XYZStatusLine_list):
+    key = "f"
+
+
+class XYZStatus(object):
+    Keys = {
+        "4": ("ip_address", "IP Address", None),
+        "b": ("bed_temperature", "Bed temperature", None),
+        "c": ("k_value", "K value", None),
+        "d": (
+            "job_progress", "Job progress",  None,
+            ["percentage", "elapsed time", "estimated time"]
+        ),
+        "e": ("error_status", "Error status", None),
+        "f": (
+            "filament_lengths", "Remaining filament", [],
+            ["color 1", "color 2"]
+        ),
+        "i": ("serial_number", "Serial number", None),
+        "j": (
+            "printer_state", "Printer status", [],
+            {
+                1: ["status"],
+                2: ["status", "substatus"],
+            }
+        ),
+        "L": (
+            "lifetimes", "Life left", [],
+            {
+                3: [None, "machine life", "extruder life"],
+                4: [None, "machine life", "extruder life", "last updated"],
+            }
+        ),
+        "n": (
+            "system_name", "System name", [],
+        ),
+        "o": (
+            "attributes", "System Attribute", [],
+            ["package size (/1024)", "t (unknown)", "c (unknown)", "auto leveling (+/-)"]
+        ),
+        "p": ("model", "Model name", None),
+        "s": ("status_flags", "Status flag", []),
+        "t": ("extruder_temps", "Extruder temperature", []),
+        "v": (
+            "os_version", "Versions", None,
+            {
+                1: ["firmware version"],
+                3: ["os version", "app version", "engine version"],
+            }
+        ),
+        "w": ("filament_serials", "Filament serial number", []),
+        "h": ("pla_enabled", "PLA enabled", None),
+        "k": ("needs_calibration", "Needs calibration (for material type?)", None),
+        "W": ("wifi_settings", "Wifi settings", {}),
+        "X": ("nozzle_data", "Nozzle information", []),
+        "m": ("m_unknown", "m", None),
+        "l": ("language", "Language", None),
+    }
+
+    def __init__(self):
+        self.data = {}
+        self.instances = {}
+        # Set up lookup dictionary of handlers for each key
+        classes = XYZStatusLine.__subclasses__()
+        subclss = []
+        while classes:
+            cls = classes.pop(0)
+            subclss.append(cls)
+            classes.extend(cls.__subclasses__())
+        for key, data in self.Keys.items():
+            for c in subclss:
+                print "Checking {} for {}".format(c, key)
+                if c.key == key:
+                    print "Selected {}".format(c)
+                    subcls = c
+                    break
+            else:
+                subcls = XYZStatusLine
+            inst = subcls(key, *data)
+            self.instances[key] = inst
+
+    def parse(self, data):
+        for line in BytesIO(data).readlines():
+            line = line.strip()
+            if not line or line == "$":
+                continue
+            log.debug("Parsing line: {}".format(line))
+            key, value = XYZStatusLine.parse_line(line)
+            if not key in self.instances:
+                log.warning("Unknown status line: {}".format(key))
+                continue
+            inst = self.instances[key]
+            inst.parse(value)
+            self.data[inst.name] = self.instances[key]
+
+    def __str__(self):
+        lines = []
+        for key, status in self.data.items():
+            lines.append(str(status))
+        return "\n".join(lines)
+
 
 class ConnectionError(Exception):
     pass
@@ -45,29 +246,35 @@ class SerialConnection(Thread):
         log.debug("Starting reader thread")
         try:
             while not self.event.is_set() and self.ser.isOpen():
-                #log.debug("checking...")
+                log.debug("checking...")
                 avail = self.ser.inWaiting()
-                #log.debug("{} bytes available".format(avail))
+                log.debug("{} bytes available".format(avail))
                 if not avail:
-                    #log.debug("Sleeping")
-                    self.event.wait(1)
+                    log.debug("Sleeping")
+                    self.event.wait(0.1)
                 else:
                     line = None
-                    while (line is None or line) and self.ser.isOpen():
+                    buf = ""
+                    while avail and self.ser.isOpen():
+                        log.debug("{} bytes avail".format(avail))
                         try:
-                            line = self.ser.readline()
+                            buf += self.ser.read(avail)
                             log.debug("serial readline gave us: {!r}".format(line))
+                            while '\n' in buf:
+                                pos = buf.index('\n')+1
+                                avail -= pos
+                                line = buf[:pos]
+                                buf = buf[pos:]
+                                log.debug("got line {!r}".format(line))
+                                if callable(self.callback):
+                                    log.debug("calling callback")
+                                    self.callback(line)
+                                else:
+                                    log.debug("putting {}".format(line))
+                                    self._inq.put(line)
                         except Exception as e:
                             log.debug("Serial read failed")
                             line = ""
-                        if line:
-                            log.debug("got line {!r}".format(line))
-                            if callable(self.callback):
-                                log.debug("calling callback")
-                                self.callback(line)
-                            else:
-                                log.debug("putting {}".format(line))
-                                self._inq.put(line)
             log.debug("Exited. Serial: {}, Event: {}".format(self.ser.isOpen(), self.event.is_set()))
         except Exception as e:
             log.exception("Failed to read from serial device")
@@ -82,7 +289,7 @@ class SerialConnection(Thread):
         self.ser = serial.Serial(
             port=self.device,
             baudrate=115200,
-            timeout=1,
+            timeout=5,
             parity=serial.PARITY_NONE,
             stopbits=serial.STOPBITS_ONE,
             bytesize=serial.EIGHTBITS,
@@ -165,6 +372,8 @@ class SerialConnection(Thread):
                 if line.strip() == expect:
                     log.debug("Token found")
                     break
+                elif line.strip() == "E0":
+                    return buf
         return buf
 
 
@@ -211,12 +420,17 @@ class DaVinciJr10(PrinterInterface):
                     h.writeline(line.strip())
                 line = raw_input("")
 
-    def parse_status(self, string):
-        return string
+    def parse_status(self, string, raw):
+        if not raw:
+            status = XYZStatus()
+            status.parse(string)
+            return str(status)
+        else:
+            return string
 
-    def status(self):
+    def status(self, raw=False):
         status = self.query_cmd("a", expect="$")
-        return self.parse_status(status)
+        return self.parse_status(status, raw)
 
     def action_cmd(self, action, expect=None):
         return self.generic_cmd(self.ActionCmd, action, expect)
