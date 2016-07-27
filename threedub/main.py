@@ -33,6 +33,8 @@ output filename ends with .3w, or conversion is specifically requested.
     ap.add_argument("-r", "--raw", dest="raw", default=False, action="store_true", help="Show raw status values")
     ap.add_argument("-p", "--print", dest="start_print", default=False, action="store_true", help="Print the file to the named device (in addition to encoding and translating) (default: /dev/ttyACM0)")
     ap.add_argument("-c", "--console", dest="console", default=False, action="store_true", help="Open a console for direct communication.")
+    ap.add_argument("-u", "--unlock", dest="unlock", default=False, action="store_true", help="Unlock filament")
+    ap.add_argument("-F", "--firmware", dest="firmware", default=False, action="store_true", help="Write firmware (exclusive with other options)")
     return ap
 
 
@@ -148,7 +150,7 @@ def threedub(argv=None):
         return 1
 
     # Check for print handler
-    if args.start_print or args.status or args.console:
+    if args.start_print or args.status or args.console or args.unlock or args.firmware:
         log.debug("Using '{}' as print device".format(args.device))
         printcls = PrinterInterface.model_handler(args.model)
         log.debug("Found handler for model '{}'".format(args.model))
@@ -157,14 +159,21 @@ def threedub(argv=None):
             return 1
         printhandler = printcls(args.device)
 
+    # No input file or status query; show help
+    if not args.infile and not args.status and not args.console and not args.unlock and not args.firmware:
+        ap.print_help()
+        return 0
+
+    if args.firmware and (not args.infile or args.status or args.console or args.unlock):
+        ap.print_help()
+        return 0
+
     if printhandler and args.console:
         printhandler.console()
         return 0
 
-
-    # No input file or status query; show help
-    if not args.infile and not args.status and not args.console:
-        ap.print_help()
+    if args.firmware:
+        printhandler.write_firmware(args.infile)
         return 0
 
     # Status?
@@ -180,6 +189,11 @@ def threedub(argv=None):
             outfile.write(args.outfile)
         else:
             log.info("Not overwriting input file: {}. If this is really what you want, specify the output file path".format(args.infile))
+
+    # Unlock?
+    if args.unlock:
+        log.debug("Sending unlock commands")
+        printhandler.unlock_filament()
 
     # Print?
     if args.start_print:

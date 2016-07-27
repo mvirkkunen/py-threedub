@@ -289,14 +289,14 @@ class SerialConnection(Thread):
         self.ser = serial.Serial(
             port=self.device,
             baudrate=115200,
-            timeout=5,
+            timeout=2,
             parity=serial.PARITY_NONE,
             stopbits=serial.STOPBITS_ONE,
             bytesize=serial.EIGHTBITS,
         )
         if not self.ser.isOpen():
             raise PrinterError("Serial connection to {} failed".format(device))
-        self.start()
+        #self.start()
 
     def close(self):
         log.debug("Close called")
@@ -306,15 +306,9 @@ class SerialConnection(Thread):
 
     def drain(self):
         log.debug("Drain...")
-        while True:
-            try:
-                data = self._inq.get_nowait()
-                if data:
-                    log.debug("Drained: {!r}".format(data))
-                else:
-                    break
-            except Empty as e:
-                break
+        line = None
+        while line is None or line:
+            line = self.ser.readline()
 
     def clear(self):
         log.debug("Clearing buffer")
@@ -333,38 +327,27 @@ class SerialConnection(Thread):
         return out
  
     def write(self, data):
-        log.debug(">>> {}".format(self.dumpformat(data)))
+        log.debug(">>> {} bytes".format(len(data)))
         self.ser.write(data)
         self.ser.flush()
 
     def writeline(self, data):
         self.write(data+"\n")
 
-    def readline(self, timeout=None):
-        block = False
-        if timeout is None or timeout > 0:
-            block = True
-        log.debug("readline with block {} timeout {}".format(block, timeout))
-        try:
-            line = self._inq.get(block, timeout)
-            log.debug("inq get gave us: {}".format(line))
-            return line
-        except Empty as e:
-            log.debug("Timeout in readline, return empty")
-            return ""
+    def readline(self):
+        return self.ser.readline()
 
-    def wait_for_ok(self, timeout=10, expect="ok"):
+    def wait_for_ok(self, expect="ok"):
         log.debug("waiting for ok")
-        resp = self.readlines(timeout, expect=expect)
+        resp = self.readlines(expect=expect)
         if not resp or resp.strip() != "ok":
             raise Exception("Expected token not found: {}".format(expect))
 
-    def readlines(self, timeout=None, expect=None):
+    def readlines(self, expect=None):
         buf = ""
         line = None
-        log.debug("reading lines with timeout {}...".format(timeout))
         while line is None or line:
-            line = self.readline(timeout)
+            line = self.readline()
             log.debug("read line {!r}...".format(line))
             if line:
                 buf += line
@@ -384,6 +367,7 @@ class DaVinciJr10(PrinterInterface):
     ActionCmd = "XYZv3/action={}"
     ConfigCmd = "XYZv3/config={}"
     UploadCmd = "XYZv3/upload={filename},{size}{option}"
+    FirmwareCmd = "XYZv3/firmware={filename},{size}"
     SaveToSD = ",SaveToSD"
     UploadDidFinishCmd = "XYZv3/uploadDidFinish"
     PauseCmd = "M84 P"
@@ -432,24 +416,29 @@ class DaVinciJr10(PrinterInterface):
         status = self.query_cmd("a", expect="$")
         return self.parse_status(status, raw)
 
-    def action_cmd(self, action, expect=None):
-        return self.generic_cmd(self.ActionCmd, action, expect)
+    def action_cmd(self, action):
+        with self.connect() as conn:
+            return self.generic_cmd(conn, self.ActionCmd, action)
 
-    def generic_cmd(self, template, value, expect=None):
+    def generic_cmd(self, conn, template, value):
         cmd = template.format(value)
-        return self.bare_cmd(cmd, expect=expect)
+        return self.bare_cmd(conn, cmd)
 
-    def bare_cmd(self, cmd, expect=None):
-        with self.connect() as c:
-            c.writeline(cmd)
-            log.debug("Reading response...")
-            return c.readlines(timeout=3, expect=expect)
+    def bare_cmd(self, conn, cmd):
+        conn.writeline(cmd)
+
+    def read_response(self, conn, expect):
+        log.debug("Reading response...")
+        return conn.readlines(expect=expect)
 
     def query_cmd(self, code, expect=None):
-        return self.generic_cmd(self.QueryCmd, code, expect=expect)
+        with self.connect() as conn:
+            self.generic_cmd(conn, self.QueryCmd, code)
+            return self.read_response(conn, expect)
 
     def config_cmd(self, value):
-        return self.generic_cmd(self.ConfigCmd, value)
+        with self.connect() as conn:
+            return self.generic_cmd(conn, self.ConfigCmd, value)
 
     def pause(self):
         self.writeline(self.PauseCmd)
@@ -464,6 +453,50 @@ class DaVinciJr10(PrinterInterface):
         if not line.strip().startswith("ok"):
             self._print_continue = True
 
+    def unlock_filament(self):
+        self.config_cmd("pda:[1591]")
+        self.config_cmd("pdb:[4387]")
+        self.config_cmd("pdc:[7264]")
+        self.config_cmd("pde:[8046]")
+
+    def write_firmware(self, filename):
+        """
+        Print the given data or file.
+        """
+        print "Firmware update disabled - highly experimental!"
+        return
+
+        with open(filename, 'rb') as f:
+            data = f.read()
+            size = os.fstat(f.fileno()).st_size - 16
+            header = data[:16]
+            body = data[16:]
+            model = header.split("+")[0]
+            newversion = header.split("+")[1]
+        log.info("Writing firmware for model {}, version {}, {} bytes".format(model, newversion, size))
+        # Start upload
+        with self.connect() as conn:
+            opts = ""
+            cmd = self.FirmwareCmd.format(filename=os.path.basename(filename), size=size)
+            cmd += ",Downgrade"
+            conn.writeline(cmd)
+            conn.wait_for_ok()
+            # Send file data
+            chunks = (len(body)+8191) / 8192
+            prev = ""
+            blocksize = 8192
+            for n in range(0, chunks):
+                log.debug("Sending file chunk {}/{}".format(n, chunks))
+                chunk = struct.pack(">l", n) + struct.pack(">l", blocksize)
+                start = 8192*n
+                chunk += body[start:start+8192]
+                chunk += "\x00\x00\x00\x00"
+                conn.write(chunk)
+                # Expect "ok\n"
+                conn.wait_for_ok()
+            # Send finish; expect no response
+            conn.write(self.UploadDidFinishCmd)
+            
     def print_data(self, filename, data=None, savetosd=False):
         """
         Print the given data or file.
