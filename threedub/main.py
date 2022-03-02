@@ -55,21 +55,21 @@ output filename ends with .3w, or conversion is specifically requested.
 
 def list_support():
     # List model translators
-    print "Models:"
-    print "  {:12s}: {}".format("none", "Disable header translation")
+    print("Models:")
+    print("  {:12s}: {}".format("none", "Disable header translation"))
     for trans in ModelTranslator.implementations():
-        print "  {:12s}: {}".format(trans.model, trans.description)
-    print
+        print("  {:12s}: {}".format(trans.model, trans.description))
+    print()
     # List slicers
-    print "Slicers:"
-    print "  {:12s}: {}".format("auto", "Auto-detect")
+    print("Slicers:")
+    print("  {:12s}: {}".format("auto", "Auto-detect"))
     for slicer in Slicer.implementations():
-        print "  {:12s}: {}".format(slicer.name, slicer.description)
-    print
-    print "Output formats:"
+        print("  {:12s}: {}".format(slicer.name, slicer.description))
+    print()
+    print("Output formats:")
     for t in sorted(FilePath.Types):
-        print "  {}".format(t.replace(".", ""))
-    print
+        print("  {}".format(t.replace(".", "")))
+    print()
 
 def process_file(args):
     """
@@ -94,7 +94,7 @@ def process_file(args):
         args.outfile = outpath.path
 
     if args.output_format.replace(".", "") not in [t.replace(".", "") for t in FilePath.Types]:
-        print >> sys.stderr, "Unknown output format: {}".format(args.output_format)
+        print("Unknown output format: {}".format(args.output_format), file=sys.stderr)
         return 1
 
     # Figure out what steps to take to get to output format
@@ -178,7 +178,7 @@ def threedub(argv=None):
 
     # Status?
     if args.status:
-        print printhandler.status(args.raw)
+        print(printhandler.status(args.raw))
 
     # Process file and write it if we're not just printing
     # If output file is same as input, don't update it unless user specified the name

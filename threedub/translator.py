@@ -39,7 +39,7 @@ class GCodeTranslator(object):
         slicers = {s.name: s for s in Slicer.implementations()}
         values = Metadata()
         if self.slicer == "auto":
-            for slicer in slicers.values():
+            for slicer in list(slicers.values()):
                 inst = slicer()
                 try:
                     if inst.detect(gcode):

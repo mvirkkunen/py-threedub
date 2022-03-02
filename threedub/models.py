@@ -1,5 +1,5 @@
 import logging
-from io import BytesIO
+from io import StringIO
 from .gcode import GCodeComment
 from .bases import ModelTranslator
 from string import Formatter
@@ -49,7 +49,7 @@ class DaVinciJr10(ModelTranslator):
             
         header = self.header_template.format(**meta)
         comments = []
-        for line in BytesIO(header):
+        for line in StringIO(header):
             comments.append(GCodeComment(line.strip()))
         gcode.statements = comments + gcode.gcode
 

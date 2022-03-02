@@ -8,7 +8,7 @@ import sys
 import json
 from io import BytesIO
 from threading import Thread, Event
-from Queue import Queue, Empty
+from queue import Queue, Empty
 from datetime import datetime, timedelta
 from .filepath import FilePath
 from .bases import PrinterInterface
@@ -73,14 +73,14 @@ class XYZStatusLine_s(XYZStatusLine):
 
     def __str__(self):
         lines = []
-        for key, value in sorted(self.value.items(), key=lambda p: p[0]):
+        for key, value in sorted(list(self.value.items()), key=lambda p: p[0]):
             flag = bool(value)
             if key == "sd":
                 lines.append("SD Card present: {}".format(flag))
             elif key == "eh":
                 lines.append("Supports Engraving: {}".format(flag))
             elif key == "dr":
-                for drname, dropen in value.items():
+                for drname, dropen in list(value.items()):
                     lines.append("Door open ({}): {}".format(drname, bool(dropen)))
             elif key == "of":
                 lines.append("Allows open filament: {}".format(flag))
@@ -101,7 +101,7 @@ class XYZStatusLine_list(XYZStatusLine):
             self.subval_names = []
         else:
             self.value = parts
-            self.subval_names = range(1, len(parts)+1)
+            self.subval_names = list(range(1, len(parts)+1))
 
 class XYZStatusLine_t(XYZStatusLine_list):
     key = "t"
@@ -181,11 +181,11 @@ class XYZStatus(object):
             cls = classes.pop(0)
             subclss.append(cls)
             classes.extend(cls.__subclasses__())
-        for key, data in self.Keys.items():
+        for key, data in list(self.Keys.items()):
             for c in subclss:
-                print "Checking {} for {}".format(c, key)
+                print("Checking {} for {}".format(c, key))
                 if c.key == key:
-                    print "Selected {}".format(c)
+                    print("Selected {}".format(c))
                     subcls = c
                     break
             else:
@@ -209,7 +209,7 @@ class XYZStatus(object):
 
     def __str__(self):
         lines = []
-        for key, status in self.data.items():
+        for key, status in list(self.data.items()):
             lines.append(str(status))
         return "\n".join(lines)
 
@@ -391,8 +391,8 @@ class DaVinciJr10(PrinterInterface):
     def console(self):
         with self.connect(self._console_print) as h:
             line = None
-            print "Starting direct console to {}. '.quit' to exit".format(self.device)
-            line = raw_input("")
+            print("Starting direct console to {}. '.quit' to exit".format(self.device))
+            line = input("")
             while line is None or line.strip() != ".quit":
                 if line.startswith("\\"):
                     line = line.strip()[1:]
@@ -402,7 +402,7 @@ class DaVinciJr10(PrinterInterface):
                     h.write(line+"\r\n")
                 else:
                     h.writeline(line.strip())
-                line = raw_input("")
+                line = input("")
 
     def parse_status(self, string, raw):
         if not raw:
@@ -463,7 +463,7 @@ class DaVinciJr10(PrinterInterface):
         """
         Print the given data or file.
         """
-        print "Firmware update disabled - highly experimental!"
+        print("Firmware update disabled - highly experimental!")
         return
 
         with open(filename, 'rb') as f:

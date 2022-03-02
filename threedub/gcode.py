@@ -1,6 +1,6 @@
 import logging
 import os
-from io import BytesIO
+from io import StringIO
 from collections import namedtuple
 
 log = logging.getLogger(__name__)
@@ -58,8 +58,8 @@ class GCodeFile(object):
 
     @classmethod
     def from_string(cls, string):
-        gcode = [] 
-        for line in BytesIO(string):
+        gcode = []
+        for line in StringIO(string):
             line = line.strip()
             if not line:
                 gcode.append(GCodeBlankLine())

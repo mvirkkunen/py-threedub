@@ -24,7 +24,7 @@ class ThreeWFile(object):
     def decrypt(self, string):
         enc_gcode = string[0x2000:]
         aes = AESCipher("@xyzprinting.com@xyzprinting.com", mode=MODE_ECB, IV=chr(0)*16)
-        gcode = aes.decrypt(enc_gcode)
+        gcode = aes.decrypt(enc_gcode).decode("utf-8")
         self.gcode = GCodeFile.from_string(gcode)
 
     def encrypt_header(self):
@@ -43,13 +43,13 @@ class ThreeWFile(object):
         padded = Padding.appendPadding(fulltext)
         enc_text = aes.encrypt(padded)
 
-        magic = "3DPFNKG13WTW"
+        magic = b"3DPFNKG13WTW"
         magic2 = struct.pack("8B", 1, 2, 0, 0, 0, 0, 18, 76)
-        blanks = chr(0)*4684
-        tag = "TagEJ256"
+        blanks = b"\0"*4684
+        tag = b"TagEJ256"
         magic3 = struct.pack("4B", 0, 0, 0, 68)
         crc32 = binascii.crc32(enc_text)
-        crcstr = struct.pack(">l", crc32)
+        crcstr = struct.pack(">L", crc32)
         encrypted_header = self.encrypt_header()
         bio = BytesIO()
         bio.write(magic)
@@ -58,13 +58,13 @@ class ThreeWFile(object):
         bio.write(tag)
         bio.write(magic3)
         bio.write(crcstr)
-        bio.write((chr(0)*(68 - len(crcstr))))
+        bio.write((b"\0"*(68 - len(crcstr))))
         log.debug("Length of encrypted header: {}".format(len(encrypted_header)))
         if len(encrypted_header) > (8192 - bio.tell()):
             log.error("Header is too big to fit file format!")
         bio.write(encrypted_header)
         left = 8192 - bio.tell()
-        bio.write((chr(0)*left))
+        bio.write((b"\0"*left))
         bio.write(enc_text)
         return bio.getvalue()
 
